@@ -5,7 +5,14 @@
  * Author: Chris Toshok <toshok@ximian.com>
  */
 
+/* This if for termios2 on linux */
+#if defined(__linux__)
+#include <linux/termios.h>
+#else
 #include <termios.h>
+#include <sys/ioctl.h>
+#endif
+
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
@@ -15,7 +22,6 @@
 #else
 #include <sys/poll.h>
 #endif
-#include <sys/ioctl.h>
 
 #include <glib.h>
 
@@ -150,10 +156,18 @@ get_bytes_in_buffer (int fd, gboolean input)
 gboolean
 set_attributes (int fd, int baud_rate, MonoParity parity, int dataBits, MonoStopBits stopBits, MonoHandshake handshake)
 {
+#if defined(TCGETS2)
+	struct termios2 newtio;
+	speed_t custom_baud_rate = baud_rate;
+
+	if (ioctl(fd, TCGETS2, &newtio) < 0)
+		return FALSE;
+#else
 	struct termios newtio;
 
 	if (tcgetattr (fd, &newtio) == -1)
 		return FALSE;
+#endif
 
 	newtio.c_cflag |=  (CLOCAL | CREAD);
 	newtio.c_lflag &= ~(ICANON | ECHO | ECHOE | ECHOK | ECHONL | ISIG | IEXTEN );
@@ -228,7 +242,7 @@ set_attributes (int fd, int baud_rate, MonoParity parity, int dataBits, MonoStop
 	case 50:
 	case 0:
 	default:
-	    baud_rate = B9600;
+	    baud_rate = -1;
 		break;
 	}
 
@@ -319,15 +333,38 @@ set_attributes (int fd, int baud_rate, MonoParity parity, int dataBits, MonoStop
 	    newtio.c_iflag |= IXOFF | IXON;
 		break;
 	}
-	
-	if (cfsetospeed (&newtio, baud_rate) < 0 || cfsetispeed (&newtio, baud_rate) < 0 ||
-	    tcsetattr (fd, TCSANOW, &newtio) < 0)
-	{
+
+	if (baud_rate == -1) {
+#if defined(TCSETS2)
+		newtio.c_cflag &= ~CBAUD;
+		newtio.c_cflag |= BOTHER;
+		newtio.c_ospeed = custom_baud_rate;
+		newtio.c_ispeed = custom_baud_rate;
+
+		if(ioctl(fd, TCSETS2, &newtio) < 0)
+		{
+			return FALSE;
+		}
+		else
+		{
+			return TRUE;
+		}
+#else
+		/* don't know how to handle custom baud rate */
 		return FALSE;
+#endif
 	}
 	else
 	{
-	return TRUE;
+		if (cfsetospeed (&newtio, baud_rate) < 0 || cfsetispeed (&newtio, baud_rate) < 0 ||
+			tcsetattr (fd, TCSANOW, &newtio) < 0)
+		{
+			return FALSE;
+		}
+		else
+		{
+			return TRUE;
+		}
 	}
 }
 
